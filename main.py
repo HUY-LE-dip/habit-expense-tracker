@@ -2,8 +2,10 @@ import logging
 
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from database import SessionLocal, engine, Base
 from models import Habit, HabitLog, Expense
+from datetime import timedelta
 
 # Create all tables defined in models.py (if they don't already exist)
 # This runs once when the app starts and builds tracker.db for real
@@ -69,3 +71,41 @@ def create_expense(amount: int, category: str, db: Session = Depends(get_db)):
 @app.get("/expenses")
 def get_expenses(db: Session = Depends(get_db)):
     return db.query(Expense).all()
+
+# Returns total spending grouped by category
+@app.get("/expenses/summary")
+def get_expense_summary(db: Session = Depends(get_db)):
+    results = (
+        db.query(Expense.category, func.sum(Expense.amount).label("total"))
+        .group_by(Expense.category)
+        .all()
+    )
+    return [{"catergory": r.category, "total": r.total} for r in results]
+
+#Calculates the current streak (consecutive days logged) for a habit
+@app.get("/habits/{habit_id}/streak")
+def get_habit_streak(habit_id: int, db: Session = Depends(get_db)):
+    logs = (
+        db.query(HabitLog)
+        .filter(HabitLog.habit_id == habit_id)
+        .order_by(HabitLog.log_date.desc())
+        .all()
+    )
+
+    if not logs:
+        return {"habit_id": habit_id, "streak": 0}
+
+    # Get just the dates (ignoring time), removving duplicates same-day logs
+    log_dates = sorted({log.log_date.date() for log in logs}, reverse=True)
+
+    streak = 1
+    today = log_dates[0]
+
+    for i in range(1, len(log_dates)):
+        expected_previous_day = today - timedelta(days=i)
+        if log_dates[i] == expected_previous_day:
+            streak += 1
+        else:
+            break   
+
+    return {"habit_id": habit_id, "streak": streak}
